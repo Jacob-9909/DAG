@@ -1,0 +1,42 @@
+[project]
+name = "flow-gen"
+version = "0.1.0"
+description = "Dynamic DAG / Flow Generation agent orchestrator"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Woohyuck Jeong" },
+]
+dependencies = [
+    "anthropic>=0.40.0",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+flow-gen = "flow_gen.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "unit: 단위 테스트",
+    "integration: 통합 테스트",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
