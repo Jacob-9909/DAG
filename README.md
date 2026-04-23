@@ -30,7 +30,7 @@ compiled.invoke(initial_state) → 최종 state dict
 ```
 .
 ├── pyproject.toml
-├── src/flow_gen/
+├── src/dag_langgraph/
 │   ├── __init__.py
 │   ├── nodes.py        # Node dataclass + NODES 레지스트리 (사전 정의)
 │   ├── graph.py        # Graph 빌더 (add_node/add_edge/compile/invoke)
@@ -69,7 +69,7 @@ uv run pytest --cov=src --cov-report=term-missing
 ## Graph API 직접 사용 (노드 직접 바인딩)
 
 ```python
-from flow_gen import Graph, START, END, NODES
+from dag_langgraph import Graph, START, END, NODES
 
 g = Graph()
 g.add_node("fetch_weather", NODES["fetch_weather"].fn)
@@ -83,7 +83,7 @@ state = g.compile().invoke(initial_state={"city": "Busan"})
 
 ## 새 노드 추가
 
-[src/flow_gen/nodes.py](src/flow_gen/nodes.py) 의 `_REGISTRY` 에 `Node(name, description, fn)` 추가.
+[src/dag_langgraph/nodes.py](src/dag_langgraph/nodes.py) 의 `_REGISTRY` 에 `Node(name, description, fn)` 추가.
 설명에 **읽는 state 키** + **쓰는 state 키** 명시. Planner 는 이 설명만으로 연결 가능성을 판단한다.
 
 ## 설계 포인트

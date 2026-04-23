@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from flow_gen.graph import END, START, Graph, GraphError
+from dag_langgraph.graph import END, START, Graph, GraphError
 
 
 def _echo(key: str, value: str):

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from flow_gen.executor import GraphError, build, run, validate
-from flow_gen.planner import Plan
+from dag_langgraph.executor import GraphError, build, run, validate
+from dag_langgraph.planner import Plan
 
 
 @pytest.mark.unit
@@ -33,14 +33,13 @@ def test_unknown_node_rejected() -> None:
 
 @pytest.mark.unit
 def test_edge_outside_selected_rejected() -> None:
-    p = Plan(
-        thought="",
-        initial_state={"city": "X"},
-        selected=["fetch_weather"],
-        edges=[("fetch_weather", "translate_en")],
-    )
-    with pytest.raises(GraphError, match="selected 외부"):
-        build(p)
+    with pytest.raises(ValueError, match="selected 외부"):
+        Plan(
+            thought="",
+            initial_state={"city": "X"},
+            selected=["fetch_weather"],
+            edges=[("fetch_weather", "translate_en")],
+        )
 
 
 @pytest.mark.unit

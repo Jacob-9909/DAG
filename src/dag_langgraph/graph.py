@@ -1,4 +1,4 @@
-"""Graph builder (LangGraph-style). 공유 state dict 기반.
+"""Graph builder backed by LangGraph. 공유 state dict 기반.
 
 사용 패턴:
     g = Graph()
@@ -15,13 +15,12 @@ from __future__ import annotations
 import logging
 from collections import defaultdict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from langgraph.graph import END, START, StateGraph
 
-START = "__start__"
-END = "__end__"
+logger = logging.getLogger(__name__)
 
 State = dict[str, Any]
 NodeFn = Callable[[State], State]
@@ -42,22 +41,17 @@ class CompiledGraph:
     order: tuple[str, ...]
     nodes: dict[str, NodeSpec]
     adj: dict[str, tuple[str, ...]]
+    _runnable: Any = field(repr=False, hash=False, compare=False)
 
     def invoke(self, initial_state: State | None = None, verbose: bool = False) -> State:
-        state: State = dict(initial_state or {})
-        for nid in self.order:
-            if nid in (START, END):
-                continue
-            spec = self.nodes[nid]
-            if verbose:
-                logger.info("run %s (state keys=%s)", nid, list(state))
-            update = spec.fn(state)
-            if not isinstance(update, dict):
-                raise GraphError(f"{nid} 는 dict 반환 필요, got {type(update).__name__}")
-            state.update(update)
-            if verbose:
-                logger.info("  -> update=%s", update)
-        return state
+        if verbose:
+            logger.info("LangGraph invoke start (state keys=%s)", list(initial_state or {}))
+        final = self._runnable.invoke(dict(initial_state or {}))
+        if not isinstance(final, dict):
+            raise GraphError(f"graph invoke 결과는 dict 여야 함, got {type(final).__name__}")
+        if verbose:
+            logger.info("LangGraph invoke done (state keys=%s)", list(final))
+        return final
 
 
 class Graph:
@@ -87,11 +81,30 @@ class Graph:
         self._validate_edges()
         adj = self._adjacency()
         order = self._topo_order(adj)
+
+        sg = StateGraph(dict)
+        for name, spec in self._nodes.items():
+            sg.add_node(name, self._validated_node_fn(name, spec.fn))
+        for src, dst in self._edges:
+            sg.add_edge(src, dst)
+        runnable = sg.compile()
+
         return CompiledGraph(
             order=tuple(order),
             nodes=dict(self._nodes),
             adj={k: tuple(v) for k, v in adj.items()},
+            _runnable=runnable,
         )
+
+    def _validated_node_fn(self, name: str, fn: NodeFn) -> Callable[[State], State]:
+        def wrapped(state: State) -> State:
+            update = fn(state)
+            if not isinstance(update, dict):
+                raise GraphError(f"{name} 는 dict 반환 필요, got {type(update).__name__}")
+            # 기존 엔진과 동일하게 "누적 state + update" semantics를 유지한다.
+            return {**state, **update}
+
+        return wrapped
 
     def _validate_edges(self) -> None:
         ids = set(self._nodes) | {START, END}
@@ -125,7 +138,6 @@ class Graph:
             raise GraphError("사이클 탐지됨")
         return order
 
-    # CLI 편의 접근자
     @property
     def edges(self) -> frozenset[tuple[str, str]]:
         return frozenset(self._edges)

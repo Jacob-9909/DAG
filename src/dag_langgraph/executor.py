@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from flow_gen.graph import END, START, CompiledGraph, Graph, GraphError
-from flow_gen.nodes import NODES
-from flow_gen.planner import Plan
+from dag_langgraph.graph import END, START, CompiledGraph, Graph, GraphError
+from dag_langgraph.nodes import NODES
+from dag_langgraph.planner import Plan
 
 
 def build(plan: Plan) -> Graph:

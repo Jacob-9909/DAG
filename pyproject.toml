@@ -1,5 +1,5 @@
 [project]
-name = "flow-gen"
+name = "dag-langgraph"
 version = "0.1.0"
 description = "Dynamic DAG / Flow Generation agent orchestrator"
 readme = "README.md"
@@ -9,6 +9,7 @@ authors = [
 ]
 dependencies = [
     "anthropic>=0.40.0",
+    "langgraph>=1.1.9",
     "pydantic>=2.7",
 ]
 
@@ -20,7 +21,7 @@ dev = [
 ]
 
 [project.scripts]
-flow-gen = "flow_gen.cli:main"
+flow-gen = "dag_langgraph.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]

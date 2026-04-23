@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from flow_gen.nodes import NODES, descriptions
+from dag_langgraph.nodes import NODES, descriptions
 
 
 @pytest.mark.unit

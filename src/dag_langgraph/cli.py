@@ -6,9 +6,9 @@ import json
 import logging
 import sys
 
-from flow_gen.executor import build
-from flow_gen.nodes import descriptions
-from flow_gen.planner import plan as make_plan
+from dag_langgraph.executor import build
+from dag_langgraph.nodes import descriptions
+from dag_langgraph.planner import plan as make_plan
 
 
 def main() -> None:
@@ -37,6 +37,12 @@ def main() -> None:
     sys.stdout.write("[planner edges]\n")
     for src, dst in p.edges:
         sys.stdout.write(f"  {src} -> {dst}\n")
+    sys.stdout.write("[planner steps]\n")
+    for step in p.steps:
+        sys.stdout.write(f"  {step.id}: {step.goal} | tasks={step.tasks}\n")
+    sys.stdout.write("[planner parallel]\n")
+    for group in p.parallel:
+        sys.stdout.write(f"  {group}\n")
 
     g = build(p)
     sys.stdout.write("[graph edges (+ START/END)]\n")
