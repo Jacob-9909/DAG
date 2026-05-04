@@ -12,8 +12,8 @@ from dag_langgraph.planner import plan as make_plan
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="flow-gen", description="Dynamic DAG runner")
-    parser.add_argument("goal", nargs="*", help="user goal (natural language)")
+    parser = argparse.ArgumentParser(prog="flow-gen", description="Dynamic DAG order pipeline runner")
+    parser.add_argument("goal", nargs="*", help="처리 목표 (자연어)")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--list-nodes", action="store_true", help="노드 카탈로그 출력")
     args = parser.parse_args()
@@ -27,34 +27,49 @@ def main() -> None:
         sys.stdout.write(json.dumps(descriptions(), ensure_ascii=False, indent=2) + "\n")
         return
 
-    goal = " ".join(args.goal) or "서울 날씨 조회 후 영어로 요약"
+    goal = " ".join(args.goal) or "주문 처리해줘"
     sys.stdout.write(f"[goal] {goal}\n\n")
 
     p = make_plan(goal)
     sys.stdout.write(f"[thought] {p.thought}\n")
     sys.stdout.write(f"[initial_state] {json.dumps(p.initial_state, ensure_ascii=False)}\n")
-    sys.stdout.write(f"[selected] {p.selected}\n")
+    sys.stdout.write(f"[selected nodes] {p.selected}\n\n")
+
     sys.stdout.write("[planner edges]\n")
     for src, dst in p.edges:
-        sys.stdout.write(f"  {src} -> {dst}\n")
-    sys.stdout.write("[planner steps]\n")
+        sys.stdout.write(f"  {src} → {dst}\n")
+
+    sys.stdout.write("\n[execution steps]\n")
     for step in p.steps:
-        sys.stdout.write(f"  {step.id}: {step.goal} | tasks={step.tasks}\n")
-    sys.stdout.write("[planner parallel]\n")
-    for group in p.parallel:
-        sys.stdout.write(f"  {group}\n")
+        parallel_marker = ""
+        for group in p.parallel:
+            if all(t in group for t in step.tasks) and len(step.tasks) > 1:
+                parallel_marker = "  ← 병렬"
+                break
+        sys.stdout.write(f"  {step.id}: {step.goal}{parallel_marker}\n")
+        for task in step.tasks:
+            sys.stdout.write(f"    · {task}\n")
 
     g = build(p)
-    sys.stdout.write("[graph edges (+ START/END)]\n")
+    sys.stdout.write("\n[graph edges (+ START/END)]\n")
     for src, dst in sorted(g.edges):
-        sys.stdout.write(f"  {src} -> {dst}\n")
+        sys.stdout.write(f"  {src} → {dst}\n")
 
     compiled = g.compile()
-    sys.stdout.write(f"\n[topo order] {' -> '.join(compiled.order)}\n\n")
+    sys.stdout.write(f"\n[topo order]\n  {' → '.join(compiled.order)}\n\n")
 
     final = compiled.invoke(initial_state=p.initial_state, verbose=args.verbose)
-    sys.stdout.write("[final state]\n")
-    sys.stdout.write(json.dumps(final, ensure_ascii=False, indent=2) + "\n")
+
+    sys.stdout.write("[result]\n")
+    result_keys = [
+        "order_valid", "inventory_ok", "payment_valid",
+        "discount_amount", "reservation_id", "charge_id", "charged_amount",
+        "shipment_id", "shipment_ok", "tracking_url",
+        "notification_sent", "analytics_updated",
+    ]
+    for key in result_keys:
+        if key in final:
+            sys.stdout.write(f"  {key}: {final[key]}\n")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ import logging
 from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
 from langgraph.graph import END, START, StateGraph
 
@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 State = dict[str, Any]
 NodeFn = Callable[[State], State]
+
+# 병렬 노드가 동시에 state를 쓸 때 LangGraph가 dict 를 merge 하도록 reducer 지정.
+# StateGraph(dict) 는 LastValue 채널만 지원해 fan-in 에서 InvalidUpdateError 발생.
+_MergeableState = Annotated[dict, lambda a, b: {**a, **b}]
 
 
 class GraphError(Exception):
@@ -82,7 +86,7 @@ class Graph:
         adj = self._adjacency()
         order = self._topo_order(adj)
 
-        sg = StateGraph(dict)
+        sg = StateGraph(_MergeableState)
         for name, spec in self._nodes.items():
             sg.add_node(name, self._validated_node_fn(name, spec.fn))
         for src, dst in self._edges:
@@ -101,8 +105,7 @@ class Graph:
             update = fn(state)
             if not isinstance(update, dict):
                 raise GraphError(f"{name} 는 dict 반환 필요, got {type(update).__name__}")
-            # 기존 엔진과 동일하게 "누적 state + update" semantics를 유지한다.
-            return {**state, **update}
+            return update  # 부분 업데이트만 반환, reducer가 기존 state에 merge
 
         return wrapped
 

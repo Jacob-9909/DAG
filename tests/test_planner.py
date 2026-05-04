@@ -8,29 +8,35 @@ from dag_langgraph.planner import Plan, plan
 
 
 @pytest.mark.unit
-def test_stub_plan_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stub_plan_default_full_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    p = plan("서울 날씨 알려줘")
+    p = plan("주문 처리해줘")
     assert isinstance(p, Plan)
     assert all(name in NODES for name in p.selected)
+    # 전체 파이프라인: 8개 노드
+    assert "validate_order" in p.selected
+    assert "create_shipment" in p.selected
     assert p.steps
-    assert isinstance(p.parallel, list)
+    # 병렬 그룹 존재
+    assert any(len(g) >= 2 for g in p.parallel)
 
 
 @pytest.mark.unit
-def test_stub_plan_calc_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stub_plan_inventory_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    p = plan("2+3 계산해줘")
-    assert p.selected == ["calc"]
-    assert p.steps[0].tasks == ["calc"]
+    p = plan("재고 확인만 해줘")
+    assert p.selected == ["validate_order", "check_inventory"]
+    assert p.steps[0].tasks == ["validate_order"]
+    assert p.parallel == []
 
 
 @pytest.mark.unit
-def test_stub_plan_search_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stub_plan_discount_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    p = plan("AI news 검색해줘")
-    assert "search_web" in p.selected
-    assert len(p.steps) == 2
+    p = plan("할인 쿠폰 적용해서 주문 처리")
+    assert "apply_discount" in p.selected
+    assert any("apply_discount" in g for g in p.parallel) or \
+           any("apply_discount" in step.tasks for step in p.steps)
 
 
 @pytest.mark.unit
@@ -39,8 +45,8 @@ def test_plan_validation_rejects_unknown_parallel_node() -> None:
         Plan(
             thought="",
             initial_state={},
-            selected=["calc"],
+            selected=["validate_order"],
             edges=[],
             steps=[],
-            parallel=[["calc", "ghost"]],
+            parallel=[["validate_order", "ghost_node"]],
         )

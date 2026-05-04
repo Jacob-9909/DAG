@@ -62,10 +62,9 @@ class PlanStep(BaseModel):
     tasks: list[str] = Field(default_factory=list)
 
 
-SYSTEM = """너는 Flow Planner. 노드는 이미 전부 만들어져 있다.
+SYSTEM = """너는 주문 처리 Flow Planner. 노드는 이미 전부 만들어져 있다.
 너의 역할: 주어진 노드 카탈로그에서 필요한 것만 **선택**하고,
 그들 사이의 **엣지/단계/병렬 그룹**을 결정한다.
-노드 구현, params 는 손대지 마라. 오직 선택 + 연결.
 
 규칙:
 - `selected` 에 들어가는 이름은 카탈로그에 존재해야 함
@@ -75,8 +74,8 @@ SYSTEM = """너는 Flow Planner. 노드는 이미 전부 만들어져 있다.
 - 사이클 금지 (DAG)
 - 노드가 읽는 state 키는 선행 노드가 쓰거나 `initial_state` 에서 제공돼야 함
 - 최소 노드만 선택
-- `steps` 는 목적 달성을 위한 멀티태스크 순서
-- `parallel` 은 동시에 실행 가능한 노드 그룹(정보성 메타데이터)
+- check_inventory 와 verify_payment 는 서로 의존하지 않으므로 병렬 가능
+- send_notification 과 update_analytics 는 서로 의존하지 않으므로 병렬 가능
 
 출력: JSON only. 스키마:
 {
@@ -126,70 +125,117 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
+# ---------- 스텁 플랜 ----------
+
+_BASE_ORDER = {
+    "order_id": "ORD-2024-001",
+    "items": [{"sku": "SHOE-42", "qty": 1, "price": 89000}],
+    "payment_method": "card",
+    "customer_email": "customer@example.com",
+    "shipping_address": {"city": "Seoul", "zip": "04524", "street": "Gangnam-daero 1"},
+}
+
+
 def _stub_plan(goal: str) -> Plan:
     """ANTHROPIC_API_KEY 없을 때 데모용 고정 계획."""
-    # 단순 휴리스틱으로 데모 경로 분기
     goal_lower = goal.lower()
-    if "계산" in goal or "calc" in goal_lower:
+
+    # 할인 쿠폰 주문
+    if "할인" in goal or "쿠폰" in goal or "discount" in goal_lower:
         return Plan(
-            thought=f"stub: '{goal}' → 계산 경로",
-            initial_state={"expr": "2 + 3 * 4"},
-            selected=["calc"],
-            edges=[],
-            steps=[
-                PlanStep(
-                    id="step_1",
-                    goal="수식을 계산해 결과를 산출한다",
-                    tasks=["calc"],
-                )
+            thought="할인 쿠폰 적용 → 검증·재고·결제 병렬 → 배송 → 알림·통계 병렬",
+            initial_state={**_BASE_ORDER, "coupon_code": "SAVE20"},
+            selected=[
+                "validate_order",
+                "check_inventory",
+                "apply_discount",
+                "verify_payment",
+                "reserve_inventory",
+                "charge_payment",
+                "create_shipment",
+                "send_notification",
+                "update_analytics",
             ],
-            parallel=[],
-        )
-    if "검색" in goal or "news" in goal_lower:
-        return Plan(
-            thought=f"stub: '{goal}' → 검색 → 요약 → 한글 번역",
-            initial_state={"query": "AI news"},
-            selected=["search_web", "summarize_results", "translate_ko"],
             edges=[
-                ("search_web", "summarize_results"),
-                ("summarize_results", "translate_ko"),
+                ("validate_order", "check_inventory"),
+                ("validate_order", "apply_discount"),
+                ("apply_discount", "verify_payment"),
+                ("check_inventory", "reserve_inventory"),
+                ("verify_payment", "charge_payment"),
+                ("reserve_inventory", "create_shipment"),
+                ("charge_payment", "create_shipment"),
+                ("create_shipment", "send_notification"),
+                ("create_shipment", "update_analytics"),
             ],
             steps=[
-                PlanStep(
-                    id="step_1",
-                    goal="검색 결과를 수집한다",
-                    tasks=["search_web"],
-                ),
-                PlanStep(
-                    id="step_2",
-                    goal="검색 결과를 요약하고 번역한다",
-                    tasks=["summarize_results", "translate_ko"],
-                ),
+                PlanStep(id="step_1", goal="주문 유효성 검사", tasks=["validate_order"]),
+                PlanStep(id="step_2", goal="재고 확인 + 할인 계산 병렬", tasks=["check_inventory", "apply_discount"]),
+                PlanStep(id="step_3", goal="재고 예약 + 결제 실행 병렬", tasks=["reserve_inventory", "verify_payment", "charge_payment"]),
+                PlanStep(id="step_4", goal="배송 생성", tasks=["create_shipment"]),
+                PlanStep(id="step_5", goal="알림 발송 + 통계 업데이트 병렬", tasks=["send_notification", "update_analytics"]),
+            ],
+            parallel=[
+                ["check_inventory", "apply_discount"],
+                ["reserve_inventory", "charge_payment"],
+                ["send_notification", "update_analytics"],
+            ],
+        )
+
+    # 재고 확인만
+    if "재고" in goal or "inventory" in goal_lower:
+        return Plan(
+            thought="주문 검증 후 재고만 확인",
+            initial_state=_BASE_ORDER,
+            selected=["validate_order", "check_inventory"],
+            edges=[("validate_order", "check_inventory")],
+            steps=[
+                PlanStep(id="step_1", goal="주문 유효성 검사", tasks=["validate_order"]),
+                PlanStep(id="step_2", goal="재고 확인", tasks=["check_inventory"]),
             ],
             parallel=[],
         )
-    # 기본: 날씨 → 요약 → 영어 번역
-    if "fetch_weather" not in NODES:
-        raise RuntimeError("NODES 레지스트리에 fetch_weather 누락")
+
+    # 기본: 전체 주문 처리 파이프라인
+    #   validate_order
+    #     ├── check_inventory ──→ reserve_inventory ─┐
+    #     └── verify_payment ──→ charge_payment ──────┤
+    #                                                  ↓
+    #                                          create_shipment
+    #                                            ├── send_notification
+    #                                            └── update_analytics
     return Plan(
-        thought=f"stub: '{goal}' → 날씨 → 요약 → 영어 번역",
-        initial_state={"city": "Seoul"},
-        selected=["fetch_weather", "summarize_weather", "translate_en"],
+        thought="전체 주문 처리: 검증 → 재고·결제 병렬 → 배송 → 알림·통계 병렬",
+        initial_state=_BASE_ORDER,
+        selected=[
+            "validate_order",
+            "check_inventory",
+            "verify_payment",
+            "reserve_inventory",
+            "charge_payment",
+            "create_shipment",
+            "send_notification",
+            "update_analytics",
+        ],
         edges=[
-            ("fetch_weather", "summarize_weather"),
-            ("summarize_weather", "translate_en"),
+            ("validate_order", "check_inventory"),
+            ("validate_order", "verify_payment"),
+            ("check_inventory", "reserve_inventory"),
+            ("verify_payment", "charge_payment"),
+            ("reserve_inventory", "create_shipment"),
+            ("charge_payment", "create_shipment"),
+            ("create_shipment", "send_notification"),
+            ("create_shipment", "update_analytics"),
         ],
         steps=[
-            PlanStep(
-                id="step_1",
-                goal="도시 날씨를 조회한다",
-                tasks=["fetch_weather"],
-            ),
-            PlanStep(
-                id="step_2",
-                goal="날씨를 요약하고 영어로 변환한다",
-                tasks=["summarize_weather", "translate_en"],
-            ),
+            PlanStep(id="step_1", goal="주문 유효성 검사", tasks=["validate_order"]),
+            PlanStep(id="step_2", goal="재고 확인 + 결제 검증 병렬", tasks=["check_inventory", "verify_payment"]),
+            PlanStep(id="step_3", goal="재고 예약 + 결제 실행 병렬", tasks=["reserve_inventory", "charge_payment"]),
+            PlanStep(id="step_4", goal="배송 생성", tasks=["create_shipment"]),
+            PlanStep(id="step_5", goal="알림 발송 + 통계 업데이트 병렬", tasks=["send_notification", "update_analytics"]),
         ],
-        parallel=[],
+        parallel=[
+            ["check_inventory", "verify_payment"],
+            ["reserve_inventory", "charge_payment"],
+            ["send_notification", "update_analytics"],
+        ],
     )
