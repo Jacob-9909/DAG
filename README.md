@@ -1,100 +1,146 @@
-# flow-gen
+# dag-langgraph
 
-Dynamic DAG / Flow Generation agent orchestrator.
+동적 DAG 오케스트레이터. 노드는 미리 정의하고, 엣지는 LLM Planner가 목표에 따라 즉석에서 결정한다.
 
-**설계:**
-- 노드는 `nodes.py` 레지스트리에 **미리 정의**됨 (이름 + 설명 + 구현)
-- Planner(LLM)는 카탈로그 설명만 보고 필요한 **노드를 선택** + **엣지를 결정**
-- 노드 구현/params 는 Planner 가 건드리지 않는다
-- 데이터 흐름: 공유 `state` dict (LangGraph 스타일). 각 노드 `fn(state) -> state_update`.
-
-## 흐름
+## 아키텍처
 
 ```
-유저 목표
-  ↓ (카탈로그 descriptions 프롬프트 주입)
-Planner → Plan JSON {thought, initial_state, selected, edges}
+유저 목표 (자연어)
   ↓
-executor.build(plan):
-    for name in selected: g.add_node(name, NODES[name].fn)
-    for src, dst in edges: g.add_edge(src, dst)
-    # in-edge 없음 → START→node, out-edge 없음 → node→END 자동
+Planner (LLM) — 노드 카탈로그를 보고 필요한 노드 선택 + 엣지 결정
+  ↓ Plan JSON
+  { selected: [...], edges: [[src, dst], ...], initial_state: {...} }
   ↓
-g.compile() → CompiledGraph (검증 + 위상정렬)
+executor.build(plan) — Plan을 LangGraph StateGraph로 조립
   ↓
-compiled.invoke(initial_state) → 최종 state dict
+compile() → invoke(initial_state) → 최종 state dict
 ```
 
-## 구조
+**핵심 원칙:** `nodes.py`의 노드 함수들은 서로의 존재를 모른다. 어떤 노드 다음에 무엇이 실행될지는 코드에 없고, 쿼리가 들어올 때마다 LLM이 JSON으로 결정한다.
+
+## 노드 구조 (주문 처리 파이프라인)
+
+DAG의 의존성·병렬성·합류(fan-in)가 모두 드러나는 도메인으로 설계됐다.
 
 ```
-.
-├── pyproject.toml
-├── src/dag_langgraph/
-│   ├── __init__.py
-│   ├── nodes.py        # Node dataclass + NODES 레지스트리 (사전 정의)
-│   ├── graph.py        # Graph 빌더 (add_node/add_edge/compile/invoke)
-│   ├── planner.py      # LLM → Plan (selected + edges). 키 없으면 stub
-│   ├── executor.py     # Plan → Graph 변환 + run 파사드
-│   └── cli.py          # `flow-gen` entrypoint
-└── tests/
-    ├── test_graph.py
-    ├── test_nodes.py
-    ├── test_planner.py
-    └── test_executor.py
+validate_order                    ← 항상 첫 번째 (필수 필드 검증)
+    ├── check_inventory    ┐      ← 서로 무관 → 병렬 실행 가능
+    └── verify_payment     ┘
+          │
+    reserve_inventory             ← check_inventory 결과 필요
+    charge_payment                ← verify_payment 결과 필요
+          │
+    create_shipment               ← 둘 다 완료돼야 실행 (fan-in)
+          │
+    ├── send_notification  ┐      ← 서로 무관 → 병렬 실행 가능
+    └── update_analytics   ┘
+
+선택적:
+    apply_discount    — coupon_code 있을 때 verify_payment 앞에 삽입
+    validate_address  — 해외 배송 등 주소 검증 필요 시 create_shipment 앞에 삽입
 ```
 
-## Setup
+| DAG 개념 | 예시 |
+|---------|------|
+| 순차 의존 | `check_inventory` → `reserve_inventory` (재고 없으면 예약 불가) |
+| 병렬 실행 | `check_inventory` ↔ `verify_payment` (서로 무관) |
+| fan-in (합류) | `reserve_inventory` + `charge_payment` → `create_shipment` |
+| 선택적 경로 | 쿠폰 있을 때만 `apply_discount` 삽입 |
+
+## 파일 구조
+
+```
+src/dag_langgraph/
+├── nodes.py      노드 카탈로그 — Node(name, description, fn) 등록. 엣지 정보 없음
+├── planner.py    LLM → Plan(selected, edges, initial_state). API 키 없으면 stub
+├── executor.py   Plan → Graph 변환 + run 파사드
+├── graph.py      LangGraph StateGraph 래퍼 (병렬 merge reducer, 사이클 탐지)
+└── cli.py        flow-gen CLI 진입점
+
+tests/
+├── test_nodes.py      노드 함수 단위 테스트 + 전체 happy-path 수동 실행
+├── test_planner.py    stub Plan 검증
+├── test_executor.py   Plan → 그래프 변환·실행·엣지 검증
+└── test_graph.py      Graph 빌더 단위 테스트
+```
+
+## 설치 및 실행
 
 ```bash
 uv sync --extra dev
-cp .env.example .env        # ANTHROPIC_API_KEY (선택, 없으면 stub)
+cp .env.example .env   # ANTHROPIC_API_KEY 입력 (없으면 stub plan 사용)
 ```
-
-## Run
 
 ```bash
-uv run flow-gen "서울 날씨 알려줘"
-uv run flow-gen --list-nodes          # 카탈로그 확인
-uv run flow-gen -v "..."              # verbose (단계별 state 변화)
+# 전체 주문 처리
+uv run flow-gen "주문 처리해줘"
+
+# 할인 쿠폰 경로 (apply_discount 노드 추가)
+uv run flow-gen "할인 쿠폰 적용해서 주문 처리"
+
+# 재고 확인만 (2노드 단순 파이프라인)
+uv run flow-gen "재고 확인만 해줘"
+
+# 노드 카탈로그 출력
+uv run flow-gen --list-nodes
+
+# 단계별 로그
+uv run flow-gen -v "주문 처리해줘"
 ```
 
-## Test
+## 테스트
 
 ```bash
-uv run pytest
-uv run pytest --cov=src --cov-report=term-missing
+uv run --extra dev pytest
+uv run --extra dev pytest --cov=src --cov-report=term-missing
 ```
 
-## Graph API 직접 사용 (노드 직접 바인딩)
+## 새 노드 추가
+
+`src/dag_langgraph/nodes.py`의 `_REGISTRY`에 추가한다.
+
+```python
+Node(
+    name="send_sms",
+    description=(
+        "고객 휴대폰 SMS 발송. "
+        "writes: sms_sent. "
+        "requires: create_shipment. send_notification 과 병렬 실행 가능."
+    ),
+    fn=_send_sms,
+)
+```
+
+description에 **읽는 state 키**와 **쓰는 state 키**를 명시하면 Planner가 연결 가능성을 스스로 판단한다.
+
+## 직접 그래프 조립 (API)
 
 ```python
 from dag_langgraph import Graph, START, END, NODES
 
 g = Graph()
-g.add_node("fetch_weather", NODES["fetch_weather"].fn)
-g.add_node("summarize_weather", NODES["summarize_weather"].fn)
-g.set_entry_point("fetch_weather")
-g.add_edge("fetch_weather", "summarize_weather")
-g.set_finish_point("summarize_weather")
+g.add_node("validate_order", NODES["validate_order"].fn)
+g.add_node("check_inventory", NODES["check_inventory"].fn)
+g.add_edge(START, "validate_order")
+g.add_edge("validate_order", "check_inventory")
+g.add_edge("check_inventory", END)
 
-state = g.compile().invoke(initial_state={"city": "Busan"})
+state = g.compile().invoke(initial_state={
+    "order_id": "ORD-001",
+    "items": [{"sku": "ITEM-A", "qty": 1, "price": 10000}],
+    "payment_method": "card",
+    "customer_email": "user@example.com",
+})
 ```
-
-## 새 노드 추가
-
-[src/dag_langgraph/nodes.py](src/dag_langgraph/nodes.py) 의 `_REGISTRY` 에 `Node(name, description, fn)` 추가.
-설명에 **읽는 state 키** + **쓰는 state 키** 명시. Planner 는 이 설명만으로 연결 가능성을 판단한다.
 
 ## 설계 포인트
 
-| 개념 | 위치 |
-|---|---|
-| 사전 정의된 노드 | `nodes.NODES` (카탈로그 + 설명) |
-| Planner 역할 제한 | 선택 + 엣지만. 구현/params 불가 |
+| 항목 | 위치 |
+|------|------|
+| 노드 카탈로그 (엣지 없음) | `nodes.NODES` |
+| Planner 역할 제한 | 선택 + 엣지만. 구현·params 불가 |
 | Pydantic 스키마 강제 | `planner.Plan` |
-| Builder API | `graph.Graph` (add_node/add_edge) |
-| 사이클 탐지 + 위상정렬 (Kahn) | `graph.Graph._topo_order` |
-| 공유 state 데이터 흐름 | `graph.CompiledGraph.invoke` |
-| Plan → Graph 변환 | `executor.build` |
-| Stub fallback | `planner._stub_plan` |
+| 병렬 fan-in 지원 | `graph.py` — `Annotated[dict, merge_reducer]` |
+| 사이클 탐지 (Kahn) | `graph.Graph._topo_order` |
+| START/END 자동 연결 | `executor.build` — 루트·리프 자동 감지 |
+| Stub fallback | `planner._stub_plan` — API 키 없어도 동작 |

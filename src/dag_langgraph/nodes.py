@@ -23,21 +23,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+# State: 노드 간 공유되는 데이터 저장소. 각 노드는 여기서 읽고 새 키만 돌려준다.
 State = dict[str, Any]
 
 
+# frozen=True: 한 번 생성된 Node 객체는 수정 불가 → 레지스트리를 불변으로 유지
 @dataclass(frozen=True)
 class Node:
-    name: str
-    description: str
-    fn: Callable[[State], State]
+    name: str                    # 레지스트리 키이자 Planner가 참조하는 식별자
+    description: str             # LLM이 읽고 "이 노드를 언제 써야 하는지" 판단하는 설명
+    fn: Callable[[State], State] # 실제 실행 함수. state를 받아 새 키들만 담은 dict 반환
 
 
 # ---------- 노드 함수 ----------
+# 규칙: 각 함수는 자신이 필요한 state 키만 읽고, 자신이 생성한 키만 반환한다.
+# 다른 노드의 존재를 알 필요 없다. 연결(엣지)은 Planner가 결정한다.
 
 def _validate_order(state: State) -> State:
     """주문 필수 필드(order_id, items, payment_method, customer_email) 존재 여부 검사."""
     required = {"order_id", "items", "payment_method", "customer_email"}
+    # 집합 차집합으로 누락 필드를 한 번에 구한다
     missing = required - state.keys()
     return {
         "order_valid": len(missing) == 0,
@@ -48,7 +53,9 @@ def _validate_order(state: State) -> State:
 def _check_inventory(state: State) -> State:
     """items 목록의 각 SKU 재고를 조회. validate_order 이후 실행."""
     items: list[dict] = state.get("items", [])
-    stock: dict[str, int] = {item["sku"]: 100 for item in items}  # stub: 항상 충분
+    # 실제 서비스라면 DB/API 호출. 여기서는 항상 재고 100개로 가정(stub)
+    stock: dict[str, int] = {item["sku"]: 100 for item in items}
+    # 재고가 0개 이하인 SKU만 추려 품절 목록 생성
     short = [sku for sku, qty in stock.items() if qty < 1]
     return {
         "stock_levels": stock,
@@ -60,6 +67,7 @@ def _check_inventory(state: State) -> State:
 def _verify_payment(state: State) -> State:
     """payment_method 유효성 + 한도 검증. validate_order 이후 실행."""
     method: str = state.get("payment_method", "")
+    # 허용된 결제 수단만 통과. check_inventory와 의존 관계 없어 병렬 실행 가능
     valid = method in {"card", "transfer", "point"}
     return {
         "payment_valid": valid,
@@ -71,6 +79,7 @@ def _apply_discount(state: State) -> State:
     """coupon_code 기반 할인 금액 계산. verify_payment 이전에 실행 권장."""
     code: str | None = state.get("coupon_code")
     discount_map = {"SAVE10": 0.10, "SAVE20": 0.20, "VIP": 0.30}
+    # 쿠폰이 없거나 목록에 없으면 할인율 0
     rate = discount_map.get(code or "", 0.0)
     items: list[dict] = state.get("items", [])
     subtotal = sum(item.get("price", 0) * item.get("qty", 1) for item in items)
@@ -93,8 +102,10 @@ def _validate_address(state: State) -> State:
 
 def _reserve_inventory(state: State) -> State:
     """check_inventory 통과 후 재고 선점 예약. inventory_ok=True 필요."""
+    # inventory_ok가 False면 예약 없이 실패 결과만 반환
     if not state.get("inventory_ok"):
         return {"reservation_id": None, "reservation_ok": False}
+    # uuid로 고유한 예약 ID 생성
     return {
         "reservation_id": f"RSV-{uuid.uuid4().hex[:8].upper()}",
         "reservation_ok": True,
@@ -103,8 +114,10 @@ def _reserve_inventory(state: State) -> State:
 
 def _charge_payment(state: State) -> State:
     """verify_payment 통과 후 실제 결제 실행. payment_valid=True 필요."""
+    # payment_valid가 False면 결제 없이 실패 결과만 반환
     if not state.get("payment_valid"):
         return {"charge_id": None, "charge_ok": False}
+    # apply_discount가 선행됐으면 discount_amount가 state에 있음. 없으면 0
     discount = state.get("discount_amount", 0.0)
     items: list[dict] = state.get("items", [])
     subtotal = sum(item.get("price", 0) * item.get("qty", 1) for item in items)
@@ -118,6 +131,7 @@ def _charge_payment(state: State) -> State:
 
 def _create_shipment(state: State) -> State:
     """reserve_inventory + charge_payment 완료 후 배송 생성."""
+    # fan-in 노드: 두 선행 노드(재고 예약, 결제)가 모두 성공해야 배송 생성 가능
     if not state.get("reservation_ok") or not state.get("charge_ok"):
         return {"shipment_id": None, "shipment_ok": False}
     return {
@@ -131,6 +145,7 @@ def _send_notification(state: State) -> State:
     """배송 생성 완료 후 고객 이메일 발송. create_shipment 이후 실행."""
     email = state.get("customer_email", "")
     shipment_id = state.get("shipment_id", "")
+    # 이메일 주소와 배송 ID가 모두 있을 때만 발송 성공으로 표시
     return {
         "notification_sent": bool(email and shipment_id),
         "notified_to": email,
@@ -139,6 +154,7 @@ def _send_notification(state: State) -> State:
 
 def _update_analytics(state: State) -> State:
     """배송 생성 완료 후 주문 통계 업데이트. send_notification 과 병렬 가능."""
+    # send_notification과 의존 관계가 없으므로 동시에 실행해도 된다
     return {
         "analytics_updated": True,
         "recorded_order_id": state.get("order_id"),
@@ -147,6 +163,9 @@ def _update_analytics(state: State) -> State:
 
 
 # ---------- 레지스트리 ----------
+# description 문자열이 Planner의 판단 근거가 된다.
+# "requires:", "writes:" 형식으로 의존 관계와 출력 키를 명시해야
+# LLM이 올바른 엣지를 결정할 수 있다.
 
 _REGISTRY: list[Node] = [
     Node(
@@ -240,9 +259,10 @@ _REGISTRY: list[Node] = [
     ),
 ]
 
+# 이름으로 노드를 빠르게 조회하기 위한 딕셔너리
 NODES: dict[str, Node] = {n.name: n for n in _REGISTRY}
 
 
 def descriptions() -> list[dict[str, str]]:
-    """Planner 프롬프트용 카탈로그."""
+    """Planner 프롬프트에 주입할 카탈로그. LLM은 이 설명만 보고 노드를 선택·연결한다."""
     return [{"name": n.name, "description": n.description} for n in _REGISTRY]
