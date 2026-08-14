@@ -1,109 +1,69 @@
-"""노드 레지스트리 + 개별 노드 동작."""
+"""노드 레지스트리 + 개별 노드 동작 unit 테스트."""
 from __future__ import annotations
 
 import pytest
 
 from dag_langgraph.nodes import NODES, descriptions
 
-_ORDER = {
-    "order_id": "ORD-001",
-    "items": [{"sku": "ITEM-1", "qty": 2, "price": 5000}],
-    "payment_method": "card",
-    "customer_email": "test@example.com",
-    "shipping_address": {"city": "Seoul", "zip": "12345", "street": "Main St"},
-}
-
 
 @pytest.mark.unit
 def test_registry_non_empty_and_unique() -> None:
     names = [d["name"] for d in descriptions()]
     assert len(names) == len(set(names))
-    assert "validate_order" in NODES
-    assert "create_shipment" in NODES
+    assert len(names) >= 15
+    assert "search_web_news" in NODES
+    assert "fetch_financial_data" in NODES
+    assert "generate_full_report" in NODES
 
 
 @pytest.mark.unit
-def test_validate_order_passes_with_full_state() -> None:
-    out = NODES["validate_order"].fn(_ORDER)
-    assert out["order_valid"] is True
-    assert out["validation_errors"] == []
+def test_search_web_news_node() -> None:
+    out = NODES["search_web_news"].fn({"ticker": "AAPL"})
+    assert "news_articles" in out
+    assert len(out["news_articles"]) > 0
 
 
 @pytest.mark.unit
-def test_validate_order_fails_on_missing_field() -> None:
-    state = {k: v for k, v in _ORDER.items() if k != "customer_email"}
-    out = NODES["validate_order"].fn(state)
-    assert out["order_valid"] is False
-    assert "customer_email" in out["validation_errors"]
+def test_fetch_financial_data_node() -> None:
+    out = NODES["fetch_financial_data"].fn({"ticker": "TSLA"})
+    assert out["financial_data"]["ticker"] == "TSLA"
+    assert "operating_margin" in out["financial_data"]
 
 
 @pytest.mark.unit
-def test_check_inventory_returns_stock_per_sku() -> None:
-    out = NODES["check_inventory"].fn(_ORDER)
-    assert "ITEM-1" in out["stock_levels"]
-    assert out["inventory_ok"] is True
+def test_analyze_news_sentiment_node() -> None:
+    articles = [
+        {"snippet": "혁신과 높은 성장이 기대된다."},
+        {"snippet": "리스크 요인과 마진 압박 존재."}
+    ]
+    out = NODES["analyze_news_sentiment"].fn({"news_articles": articles})
+    assert "news_sentiment" in out
+    assert out["news_sentiment"]["label"] in ["Positive", "Negative", "Neutral"]
 
 
 @pytest.mark.unit
-def test_verify_payment_accepts_card() -> None:
-    out = NODES["verify_payment"].fn(_ORDER)
-    assert out["payment_valid"] is True
+def test_synthesize_swot_node() -> None:
+    state = {
+        "risks_and_opps": {"risks": ["Risk A"], "opportunities": ["Opp A"]},
+        "financial_analysis": {"valuation": "Fair Value"},
+        "news_sentiment": {"label": "Positive"}
+    }
+    out = NODES["synthesize_swot"].fn(state)
+    assert "swot_matrix" in out
+    assert "Strengths" in out["swot_matrix"]
+    assert "Weaknesses" in out["swot_matrix"]
 
 
 @pytest.mark.unit
-def test_verify_payment_rejects_unknown_method() -> None:
-    out = NODES["verify_payment"].fn({**_ORDER, "payment_method": "bitcoin"})
-    assert out["payment_valid"] is False
-
-
-@pytest.mark.unit
-def test_apply_discount_known_coupon() -> None:
-    out = NODES["apply_discount"].fn({**_ORDER, "coupon_code": "SAVE10"})
-    assert out["discount_rate"] == 0.10
-    assert out["discount_amount"] == pytest.approx(1000.0)
-
-
-@pytest.mark.unit
-def test_reserve_inventory_requires_inventory_ok() -> None:
-    out = NODES["reserve_inventory"].fn({**_ORDER, "inventory_ok": False})
-    assert out["reservation_ok"] is False
-    assert out["reservation_id"] is None
-
-
-@pytest.mark.unit
-def test_charge_payment_deducts_discount() -> None:
-    state = {**_ORDER, "payment_valid": True, "discount_amount": 1000.0}
-    out = NODES["charge_payment"].fn(state)
-    assert out["charge_ok"] is True
-    assert out["charged_amount"] == pytest.approx(9000.0)
-
-
-@pytest.mark.unit
-def test_create_shipment_requires_both_reserve_and_charge() -> None:
-    state = {**_ORDER, "reservation_ok": True, "charge_ok": False}
-    out = NODES["create_shipment"].fn(state)
-    assert out["shipment_ok"] is False
-
-
-@pytest.mark.unit
-def test_full_happy_path_state_flow() -> None:
-    """각 노드를 순서대로 수동 실행해 state가 올바르게 누적되는지 확인."""
-    state: dict = dict(_ORDER)
-
-    state.update(NODES["validate_order"].fn(state))
-    state.update(NODES["check_inventory"].fn(state))
-    state.update(NODES["verify_payment"].fn(state))
-    state.update(NODES["reserve_inventory"].fn(state))
-    state.update(NODES["charge_payment"].fn(state))
-    state.update(NODES["create_shipment"].fn(state))
-    state.update(NODES["send_notification"].fn(state))
-    state.update(NODES["update_analytics"].fn(state))
-
-    assert state["order_valid"] is True
-    assert state["inventory_ok"] is True
-    assert state["payment_valid"] is True
-    assert state["reservation_ok"] is True
-    assert state["charge_ok"] is True
-    assert state["shipment_ok"] is True
-    assert state["notification_sent"] is True
-    assert state["analytics_updated"] is True
+def test_generate_full_report_node() -> None:
+    state = {
+        "topic": "AI Semiconductors",
+        "executive_summary": "1. 요약1\n2. 요약2",
+        "swot_matrix": {"Strengths": ["S1"], "Weaknesses": ["W1"], "Opportunities": ["O1"], "Threats": ["T1"]},
+        "news_sentiment": {"score": 0.5, "label": "Positive"},
+        "financial_analysis": {"health_score": 90, "valuation": "Fair"},
+        "tech_trends": [{"category": "GPU Architecture", "relevance": "High"}]
+    }
+    out = NODES["generate_full_report"].fn(state)
+    assert "full_report" in out
+    assert "# 종합 인텔리전스 보고서: AI Semiconductors" in out["full_report"]
