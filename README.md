@@ -1,146 +1,107 @@
-# dag-langgraph
+# flow-gen
 
-동적 DAG 오케스트레이터. 노드는 미리 정의하고, 엣지는 LLM Planner가 목표에 따라 즉석에서 결정한다.
+Dynamic Multi-Stage Deep Research & Analytics DAG Orchestrator.
 
-## 아키텍처
+**설계:**
+- 노드는 [`nodes.py`](src/dag_langgraph/nodes.py) 레지스트리에 **독립적 효용성을 갖춘 16개 모듈**로 정의됨 (이름 + 상세 명세 + 구현)
+- Planner(LLM)는 카탈로그 설명만 보고 필요한 **노드 선택** + **다단계 의존성 엣지 및 병렬 그룹 결정**
+- 노드 구현/params 는 Planner가 건드리지 않는다
+- 데이터 흐름: 공유 `state` dict (LangGraph StateSchema 병합 래퍼 기반). 각 노드 `fn(state) -> state_update`.
+
+## 흐름
 
 ```
-유저 목표 (자연어)
+유저 목표 (예: "애플 주식 분석 및 리포트 작성")
+  ↓ (카탈로그 16개 descriptions 프롬프트 주입)
+Planner → Plan JSON {thought, initial_state, selected, edges, steps, parallel}
   ↓
-Planner (LLM) — 노드 카탈로그를 보고 필요한 노드 선택 + 엣지 결정
-  ↓ Plan JSON
-  { selected: [...], edges: [[src, dst], ...], initial_state: {...} }
+executor.build(plan):
+    selected 노드 등록 & 엣지 수동 연결
+    # in-edge 없음 → START→node, out-edge 없음 → node→END 자동 보정
   ↓
-executor.build(plan) — Plan을 LangGraph StateGraph로 조립
+g.compile() → CompiledGraph (LangGraph 컴파일 + 사이클 검증 + 위상정렬)
   ↓
-compile() → invoke(initial_state) → 최종 state dict
+compiled.invoke(initial_state) → 최종 state dict (종합 리포트, SWOT, Action Item 등)
 ```
 
-**핵심 원칙:** `nodes.py`의 노드 함수들은 서로의 존재를 모른다. 어떤 노드 다음에 무엇이 실행될지는 코드에 없고, 쿼리가 들어올 때마다 LLM이 JSON으로 결정한다.
-
-## 노드 구조 (주문 처리 파이프라인)
-
-DAG의 의존성·병렬성·합류(fan-in)가 모두 드러나는 도메인으로 설계됐다.
+## 구조
 
 ```
-validate_order                    ← 항상 첫 번째 (필수 필드 검증)
-    ├── check_inventory    ┐      ← 서로 무관 → 병렬 실행 가능
-    └── verify_payment     ┘
-          │
-    reserve_inventory             ← check_inventory 결과 필요
-    charge_payment                ← verify_payment 결과 필요
-          │
-    create_shipment               ← 둘 다 완료돼야 실행 (fan-in)
-          │
-    ├── send_notification  ┐      ← 서로 무관 → 병렬 실행 가능
-    └── update_analytics   ┘
-
-선택적:
-    apply_discount    — coupon_code 있을 때 verify_payment 앞에 삽입
-    validate_address  — 해외 배송 등 주소 검증 필요 시 create_shipment 앞에 삽입
+.
+├── pyproject.toml
+├── src/dag_langgraph/
+│   ├── __init__.py
+│   ├── nodes.py        # 16개 고효용성 노드 카탈로그 (수집 -> 분석 -> 종합 -> 후처리)
+│   ├── graph.py        # LangGraph 백엔드 빌더 (StateSchema reducer 기반 병렬 실행 지원)
+│   ├── planner.py      # LLM → Plan (다단계 의존성 & 병렬 플랜 생성, stub fallback)
+│   ├── executor.py     # Plan → Graph 변환 + run 파사드
+│   └── cli.py          # `flow-gen` CLI 엔트리포인트
+└── tests/
+    ├── test_graph.py
+    ├── test_nodes.py
+    ├── test_planner.py
+    └── test_executor.py
 ```
 
-| DAG 개념 | 예시 |
-|---------|------|
-| 순차 의존 | `check_inventory` → `reserve_inventory` (재고 없으면 예약 불가) |
-| 병렬 실행 | `check_inventory` ↔ `verify_payment` (서로 무관) |
-| fan-in (합류) | `reserve_inventory` + `charge_payment` → `create_shipment` |
-| 선택적 경로 | 쿠폰 있을 때만 `apply_discount` 삽입 |
-
-## 파일 구조
-
-```
-src/dag_langgraph/
-├── nodes.py      노드 카탈로그 — Node(name, description, fn) 등록. 엣지 정보 없음
-├── planner.py    LLM → Plan(selected, edges, initial_state). API 키 없으면 stub
-├── executor.py   Plan → Graph 변환 + run 파사드
-├── graph.py      LangGraph StateGraph 래퍼 (병렬 merge reducer, 사이클 탐지)
-└── cli.py        flow-gen CLI 진입점
-
-tests/
-├── test_nodes.py      노드 함수 단위 테스트 + 전체 happy-path 수동 실행
-├── test_planner.py    stub Plan 검증
-├── test_executor.py   Plan → 그래프 변환·실행·엣지 검증
-└── test_graph.py      Graph 빌더 단위 테스트
-```
-
-## 설치 및 실행
+## Setup
 
 ```bash
 uv sync --extra dev
-cp .env.example .env   # ANTHROPIC_API_KEY 입력 (없으면 stub plan 사용)
+cp .env.example .env        # ANTHROPIC_API_KEY (선택, 없으면 stub)
 ```
 
+## Run
+
 ```bash
-# 전체 주문 처리
-uv run flow-gen "주문 처리해줘"
+# 애플 기업/주식 분석 DAG 파이프라인 (11개 노드 4단계 파이프라인 생성)
+uv run flow-gen "애플 주식 분석 및 최근 뉴스 리포트 작성해줘"
 
-# 할인 쿠폰 경로 (apply_discount 노드 추가)
-uv run flow-gen "할인 쿠폰 적용해서 주문 처리"
+# AI 기술 논문 & 트렌드 DAG 파이프라인
+uv run flow-gen "최신 AI 기술 논문 및 트렌드 조사해줘"
 
-# 재고 확인만 (2노드 단순 파이프라인)
-uv run flow-gen "재고 확인만 해줘"
-
-# 노드 카탈로그 출력
+# 노드 카탈로그 확인
 uv run flow-gen --list-nodes
 
-# 단계별 로그
-uv run flow-gen -v "주문 처리해줘"
+# Verbose 모드 (단계별 state 변화 확인)
+uv run flow-gen -v "종합 리서치 보고서 생성해줘"
 ```
 
-## 테스트
+## Test
 
 ```bash
-uv run --extra dev pytest
-uv run --extra dev pytest --cov=src --cov-report=term-missing
+uv run pytest
+uv run pytest --cov=src --cov-report=term-missing
 ```
 
-## 새 노드 추가
-
-`src/dag_langgraph/nodes.py`의 `_REGISTRY`에 추가한다.
-
-```python
-Node(
-    name="send_sms",
-    description=(
-        "고객 휴대폰 SMS 발송. "
-        "writes: sms_sent. "
-        "requires: create_shipment. send_notification 과 병렬 실행 가능."
-    ),
-    fn=_send_sms,
-)
-```
-
-description에 **읽는 state 키**와 **쓰는 state 키**를 명시하면 Planner가 연결 가능성을 스스로 판단한다.
-
-## 직접 그래프 조립 (API)
+## Graph API 직접 사용 (노드 직접 바인딩)
 
 ```python
 from dag_langgraph import Graph, START, END, NODES
 
 g = Graph()
-g.add_node("validate_order", NODES["validate_order"].fn)
-g.add_node("check_inventory", NODES["check_inventory"].fn)
-g.add_edge(START, "validate_order")
-g.add_edge("validate_order", "check_inventory")
-g.add_edge("check_inventory", END)
+g.add_node("search_web_news", NODES["search_web_news"].fn)
+g.add_node("analyze_news_sentiment", NODES["analyze_news_sentiment"].fn)
+g.set_entry_point("search_web_news")
+g.add_edge("search_web_news", "analyze_news_sentiment")
+g.set_finish_point("analyze_news_sentiment")
 
-state = g.compile().invoke(initial_state={
-    "order_id": "ORD-001",
-    "items": [{"sku": "ITEM-A", "qty": 1, "price": 10000}],
-    "payment_method": "card",
-    "customer_email": "user@example.com",
-})
+state = g.compile().invoke(initial_state={"ticker": "AAPL"})
 ```
+
+## 새 노드 추가
+
+[`src/dag_langgraph/nodes.py`](src/dag_langgraph/nodes.py) 의 `_REGISTRY` 에 `Node(name, description, fn)` 추가.
+설명에 **읽는 state 키** + **쓰는 state 키** 명시. Planner 는 이 설명만으로 연결 가능성을 판단한다.
 
 ## 설계 포인트
 
-| 항목 | 위치 |
-|------|------|
-| 노드 카탈로그 (엣지 없음) | `nodes.NODES` |
-| Planner 역할 제한 | 선택 + 엣지만. 구현·params 불가 |
-| Pydantic 스키마 강제 | `planner.Plan` |
-| 병렬 fan-in 지원 | `graph.py` — `Annotated[dict, merge_reducer]` |
-| 사이클 탐지 (Kahn) | `graph.Graph._topo_order` |
-| START/END 자동 연결 | `executor.build` — 루트·리프 자동 감지 |
-| Stub fallback | `planner._stub_plan` — API 키 없어도 동작 |
+| 개념 | 위치 |
+|---|---|
+| 사전 정의된 16개 노드 | [`nodes.NODES`](src/dag_langgraph/nodes.py) (카탈로그 + 설명) |
+| Planner 역할 제한 | 선택 + 엣지 + 병렬 그룹만. 구현/params 불가 |
+| Pydantic 스키마 강제 | [`planner.Plan`](src/dag_langgraph/planner.py) |
+| Builder API & 병렬 State Reducer | [`graph.Graph`](src/dag_langgraph/graph.py) |
+| 사이클 탐지 + 위상정렬 (Kahn) | `graph.Graph._topo_order` |
+| 공유 state 데이터 흐름 | `graph.CompiledGraph.invoke` |
+| Plan → Graph 변환 | `executor.build` |
+| Stub fallback | `planner._stub_plan` |
