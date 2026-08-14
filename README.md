@@ -18,12 +18,12 @@ flowchart TD
     classDef process fill:#f1f5f9,color:#0f172a,stroke:#cbd5e1,stroke-width:1.5px,rx:6px;
     classDef highlight fill:#e0e7ff,color:#3730a3,stroke:#818cf8,stroke-width:2px,rx:6px;
 
-    User["👤 유저 목표 (Goal)<br/>예: 애플 주식 분석 및 리포트 작성"]:::core --> Planner["🧠 Planner (LLM)<br/>- 16개 카탈로그 명세 참조<br/>- Selected, Edges, Parallel 그룹 결정"]:::highlight
-    Planner --> PlanJSON["📋 Plan JSON<br/>{initial_state, selected, edges, steps, parallel}"]:::process
-    PlanJSON --> Executor["⚙️ Executor (Graph Builder)<br/>- Selected 노드 바인딩 & Edges 수동 구성<br/>- in/out-edge 없는 노드 START/END 자동 보정"]:::process
-    Executor --> Compile["🔗 CompiledGraph<br/>- LangGraph StateSchema 컴파일<br/>- 사이클 탐지 & Kahn 위상 정렬"]:::process
-    Compile --> Invoke["🚀 CompiledGraph.invoke()<br/>- 공유 State dict 기반 단계별 누적 실행"]:::highlight
-    Invoke --> FinalState["📊 최종 State dict<br/>(종합 리포트, SWOT, Action Item, 번역 등)"]:::core
+    User["유저 목표 (Goal)<br/>예: 애플 주식 분석 및 리포트 작성"]:::core --> Planner["Planner (LLM)<br/>- 16개 카탈로그 명세 참조<br/>- Selected, Edges, Parallel 그룹 결정"]:::highlight
+    Planner --> PlanJSON["Plan JSON<br/>{initial_state, selected, edges, steps, parallel}"]:::process
+    PlanJSON --> Executor["Executor (Graph Builder)<br/>- Selected 노드 바인딩 & Edges 수동 구성<br/>- in/out-edge 없는 노드 START/END 자동 보정"]:::process
+    Executor --> Compile["CompiledGraph<br/>- LangGraph StateSchema 컴파일<br/>- 사이클 탐지 & Kahn 위상 정렬"]:::process
+    Compile --> Invoke["CompiledGraph.invoke()<br/>- 공유 State dict 기반 단계별 누적 실행"]:::highlight
+    Invoke --> FinalState["최종 State dict<br/>(종합 리포트, SWOT, Action Item, 번역 등)"]:::core
 ```
 
 ---
@@ -40,32 +40,32 @@ flowchart TD
     classDef synth fill:#fef3c7,color:#92400e,stroke:#fcd34d,stroke-width:1.5px,rx:8px;
     classDef pub fill:#d1fae5,color:#065f46,stroke:#34d399,stroke-width:1.5px,rx:8px;
 
-    START(["🚀 __START__"]):::startEnd
+    START(["__START__"]):::startEnd
 
-    subgraph Step1 ["1️⃣ 멀티소스 데이터 수집 (Data Ingestion)"]
-        N1["📰 search_web_news<br/>뉴스 수집"]:::ingest
-        N2["📈 fetch_financial_data<br/>재무 지표 수집"]:::ingest
-        N3["💬 fetch_community_sentiment<br/>커뮤니티 트렌드 수집"]:::ingest
+    subgraph Step1 ["Step 1: 멀티소스 데이터 수집 (Data Ingestion)"]
+        N1["search_web_news<br/>뉴스 수집"]:::ingest
+        N2["fetch_financial_data<br/>재무 지표 수집"]:::ingest
+        N3["fetch_community_sentiment<br/>커뮤니티 트렌드 수집"]:::ingest
     end
 
-    subgraph Step2 ["2️⃣ 심층 인텔리전스 분석 (Analysis)"]
-        N4["📊 analyze_news_sentiment<br/>감성 점수 연산"]:::analyze
-        N5["⚖️ extract_risks_and_opportunities<br/>리스크 & 기회 요인 추출"]:::analyze
-        N6["🧮 calculate_financial_ratios<br/>재무건전성 & 밸류에이션"]:::analyze
+    subgraph Step2 ["Step 2: 심층 인텔리전스 분석 (Analysis)"]
+        N4["analyze_news_sentiment<br/>감성 점수 연산"]:::analyze
+        N5["extract_risks_and_opportunities<br/>리스크 & 기회 요인 추출"]:::analyze
+        N6["calculate_financial_ratios<br/>재무건전성 & 밸류에이션"]:::analyze
     end
 
-    subgraph Step3 ["3️⃣ SWOT & 요약 종합 (Synthesis)"]
-        N7["🧩 synthesize_swot<br/>SWOT 매트릭스 작성"]:::synth
-        N8["📝 generate_executive_summary<br/>경영진 3줄 요약"]:::synth
-        N9["📄 generate_full_report<br/>종합 마크다운 리포트"]:::synth
+    subgraph Step3 ["Step 3: SWOT & 요약 종합 (Synthesis)"]
+        N7["synthesize_swot<br/>SWOT 매트릭스 작성"]:::synth
+        N8["generate_executive_summary<br/>경영진 3줄 요약"]:::synth
+        N9["generate_full_report<br/>종합 마크다운 리포트"]:::synth
     end
 
-    subgraph Step4 ["4️⃣ 후처리 & 액션 가공 (Publishing)"]
-        N10["✅ extract_action_items<br/>우선순위 실행과제 추출"]:::pub
-        N11["🌐 translate_report_ko<br/>한국어 리포트 정제/번역"]:::pub
+    subgraph Step4 ["Step 4: 후처리 & 액션 가공 (Publishing)"]
+        N10["extract_action_items<br/>우선순위 실행과제 추출"]:::pub
+        N11["translate_report_ko<br/>한국어 리포트 정제/번역"]:::pub
     end
 
-    END(["🏁 __END__"]):::startEnd
+    END(["__END__"]):::startEnd
 
     START --> N1
     START --> N2
